@@ -19,11 +19,15 @@ pub fn capture_screenshot(quality: u8, max_dimension: u32) -> Result<String> {
     let image = screen.capture()?;
 
     // Convert to image crate format
+    let width = image.width();
+    let height = image.height();
+    let rgba_data = image.rgba();
+    
     let img = image::DynamicImage::ImageRgba8(
         image::RgbaImage::from_raw(
-            image.width(),
-            image.height(),
-            image.to_vec(),
+            width,
+            height,
+            rgba_data.to_vec(),
         )
         .ok_or_else(|| anyhow::anyhow!("Failed to create image from screenshot"))?
     );
@@ -40,9 +44,10 @@ pub fn capture_screenshot(quality: u8, max_dimension: u32) -> Result<String> {
         img
     };
 
-    // Encode as JPEG
+    // Encode as JPEG with quality
     let mut buffer = Cursor::new(Vec::new());
-    img.write_to(&mut buffer, image::ImageFormat::Jpeg)?;
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, quality);
+    img.write_with_encoder(encoder)?;
 
     // Encode to base64
     let base64_img = general_purpose::STANDARD.encode(buffer.into_inner());
