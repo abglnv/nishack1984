@@ -49,6 +49,11 @@ pub struct Heartbeat {
     pub ip: String,
     pub port: u16,
     pub version: String,
+    pub os: String,
+    pub username: String,
+    pub cpu_usage: f32,
+    pub ram_usage: f32,
+    pub uptime_secs: u64,
     pub timestamp: DateTime<Utc>,
 }
 

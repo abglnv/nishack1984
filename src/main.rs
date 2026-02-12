@@ -86,12 +86,13 @@ async fn main() -> anyhow::Result<()> {
         let store = store.clone();
         let hostname = hostname.clone();
         let ip = ip.clone();
+        let username = username.clone();
         let port = cfg.api.port;
         let interval = Duration::from_secs(cfg.redis.heartbeat_interval);
 
         tokio::spawn(async move {
             loop {
-                store.push_heartbeat(&hostname, &ip, port).await;
+                store.push_heartbeat(&hostname, &ip, port, &username).await;
                 store.register_agent(&hostname, &ip, port).await;
                 tokio::time::sleep(interval).await;
             }
@@ -176,6 +177,8 @@ async fn main() -> anyhow::Result<()> {
                     info!("Detected {} violation(s) this cycle", viols.len());
                     for v in &viols {
                         store.record_violation(v).await;
+                        // Forward to teacher backend so it appears on the dashboard
+                        store.push_violation_to_teacher(v).await;
                     }
                 }
             }

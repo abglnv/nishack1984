@@ -3,7 +3,7 @@ use redis::AsyncCommands;
 use tracing::{error, info, warn};
 
 use crate::config::RedisConfig;
-use crate::models::{Heartbeat, Violation};
+use crate::models::{Heartbeat, Violation, ViolationKind};
 
 /// Thin async wrapper around a Redis connection.
 #[derive(Clone)]
@@ -47,16 +47,44 @@ impl Store {
 
     /// Push a heartbeat. Key: `{prefix}:heartbeat:{hostname}`
     /// The key auto-expires so stale agents disappear from the dashboard.
-    pub async fn push_heartbeat(&self, hostname: &str, ip: &str, port: u16) {
+    pub async fn push_heartbeat(&self, hostname: &str, ip: &str, port: u16, username: &str) {
         let Some(mut con) = self.conn().await else {
             return;
         };
+
+        // Gather live system metrics
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_all();
+        // small sleep so CPU reading isn't 0 on first sample
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        sys.refresh_cpu_all();
+        sys.refresh_memory();
+
+        let cpu_usage = sys.global_cpu_usage();
+        let total_mem = sys.total_memory() as f64;
+        let used_mem = sys.used_memory() as f64;
+        let ram_usage = if total_mem > 0.0 {
+            (used_mem / total_mem * 100.0) as f32
+        } else {
+            0.0
+        };
+
+        let os_name = sysinfo::System::name().unwrap_or_default();
+        let os_ver = sysinfo::System::os_version().unwrap_or_default();
+        let os = format!("{os_name} {os_ver}");
+
+        let uptime_secs = sysinfo::System::uptime();
 
         let hb = Heartbeat {
             hostname: hostname.to_owned(),
             ip: ip.to_owned(),
             port,
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            os,
+            username: username.to_owned(),
+            cpu_usage,
+            ram_usage,
+            uptime_secs,
             timestamp: Utc::now(),
         };
 
@@ -181,5 +209,75 @@ impl Store {
 
         let key = self.key(&["screenshot", hostname]);
         con.get(&key).await.ok()
+    }
+
+    /// Discover the teacher server address from Redis.
+    /// Returns `Some("IP:PORT")` if the teacher has published its address.
+    pub async fn discover_teacher_address(&self) -> Option<String> {
+        let mut con = self.conn().await?;
+        let key = self.key(&["teacher", "address"]);
+        let val: Option<String> = con.get(&key).await.ok()?;
+        val
+    }
+
+    /// Forward a violation to the teacher backend via REST API.
+    /// This makes the violation appear on the teacher dashboard in real-time.
+    pub async fn push_violation_to_teacher(&self, v: &Violation) {
+        // Resolve teacher address
+        let address = match self.discover_teacher_address().await {
+            Some(addr) => addr,
+            None => {
+                warn!("Cannot forward violation to teacher — address not discovered");
+                return;
+            }
+        };
+
+        let url = format!("http://{address}/api/agent/violation");
+
+        // Map student violation model → teacher expected format
+        let payload = serde_json::json!({
+            "hostname": v.hostname,
+            "rule": match v.kind {
+                ViolationKind::Process => "banned_process",
+                ViolationKind::Domain => "banned_domain",
+            },
+            "detail": format!("{}: {} ({})",
+                match v.kind {
+                    ViolationKind::Process => "Запрещённый процесс",
+                    ViolationKind::Domain => "Запрещённый домен",
+                },
+                v.target,
+                if v.action_taken { "заблокировано" } else { "не удалось заблокировать" }
+            ),
+            "severity": match v.kind {
+                ViolationKind::Process => "high",
+                ViolationKind::Domain => "medium",
+            },
+            "timestamp": v.timestamp.to_rfc3339(),
+        });
+
+        // Fire-and-forget HTTP POST
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to create HTTP client: {e}");
+                return;
+            }
+        };
+
+        match client.post(&url).json(&payload).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                info!("✅ Violation forwarded to teacher: {}", v.target);
+            }
+            Ok(resp) => {
+                warn!("Teacher API returned {}: {}", resp.status(), v.target);
+            }
+            Err(e) => {
+                warn!("Failed to forward violation to teacher: {e}");
+            }
+        }
     }
 }
