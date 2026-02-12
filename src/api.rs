@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     extract::{Query, State},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -34,6 +34,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/violations", get(violations))
         .route("/config", get(show_config))
         .route("/screenshot", get(get_screenshot))
+        .route("/lock/{mode}", post(lock_handler))
+        .route("/open-url", post(open_url_handler))
         .layer(CorsLayer::permissive())
         .with_state(Arc::new(state))
 }
@@ -128,4 +130,159 @@ fn whoami() -> String {
     std::env::var("USERNAME") // Windows
         .or_else(|_| std::env::var("USER")) // Unix fallback
         .unwrap_or_else(|_| "unknown".into())
+}
+
+// ── Lock / open-url handlers ────────────────────────────────────
+
+/// POST /lock/{mode}  where mode = "soft" | "hard"
+async fn lock_handler(
+    axum::extract::Path(mode): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match mode.as_str() {
+        "soft" => {
+            tracing::info!("🔒 Soft-lock: minimising all windows");
+            let ok = tokio::task::spawn_blocking(soft_lock).await.unwrap_or(false);
+            if ok {
+                Json(serde_json::json!({ "status": "ok" }))
+            } else {
+                Json(serde_json::json!({ "status": "error", "error": "soft lock failed" }))
+            }
+        }
+        "hard" => {
+            tracing::info!("🔒 Hard-lock: locking workstation");
+            let ok = tokio::task::spawn_blocking(hard_lock).await.unwrap_or(false);
+            if ok {
+                Json(serde_json::json!({ "status": "ok" }))
+            } else {
+                Json(serde_json::json!({ "status": "error", "error": "hard lock failed" }))
+            }
+        }
+        _ => {
+            Json(serde_json::json!({ "status": "error", "error": "invalid mode, use soft or hard" }))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct OpenUrlBody {
+    url: String,
+}
+
+/// POST /open-url   body: { "url": "https://..." }
+async fn open_url_handler(Json(body): Json<OpenUrlBody>) -> impl IntoResponse {
+    let url = body.url.clone();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Json(serde_json::json!({ "status": "error", "error": "URL must start with http(s)://" }));
+    }
+    tracing::info!("🌐 Opening URL: {url}");
+    let ok = tokio::task::spawn_blocking(move || open_url_in_browser(&url))
+        .await
+        .unwrap_or(false);
+    if ok {
+        Json(serde_json::json!({ "status": "ok" }))
+    } else {
+        Json(serde_json::json!({ "status": "error", "error": "failed to open URL" }))
+    }
+}
+
+// ── Platform-specific implementations ───────────────────────────
+
+/// Soft lock: minimize all windows (Win: Win+D, macOS: AppleScript, Linux: wmctrl)
+fn soft_lock() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        // Use the Shell.Application COM object to toggle desktop (minimise all)
+        std::process::Command::new("powershell")
+            .args(["-WindowStyle", "Hidden", "-Command",
+                   "(New-Object -ComObject Shell.Application).MinimizeAll()"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("osascript")
+            .args(["-e", r#"tell application "System Events" to keystroke "m" using {command down, option down}"#])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("wmctrl")
+            .args(["-k", "on"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+/// Hard lock: lock the workstation
+fn hard_lock() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        // LockWorkStation via rundll32
+        std::process::Command::new("rundll32.exe")
+            .args(["user32.dll,LockWorkStation"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("pmset")
+            .args(["displaysleepnow"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try loginctl first (systemd), fallback to xdg-screensaver
+        std::process::Command::new("loginctl")
+            .args(["lock-session"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or_else(|_| {
+                std::process::Command::new("xdg-screensaver")
+                    .args(["lock"])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            })
+    }
+}
+
+/// Open a URL in the OS default browser
+fn open_url_in_browser(url: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 }
