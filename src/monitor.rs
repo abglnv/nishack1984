@@ -79,19 +79,40 @@ impl Monitor {
         violations
     }
 
-    // ── DNS cache scanning (Windows) ────────────────────────────
+    // ── DNS cache scanning (Cross-platform) ─────────────────────
 
-    /// Parse `ipconfig /displaydns` output for banned domains.
+    /// Parse DNS cache output for banned domains.
+    /// Windows: ipconfig /displaydns
+    /// macOS/Linux: dscacheutil -cachedump or parse browser history/network logs
     pub fn scan_dns_cache(&self) -> Vec<Violation> {
-        let output = match std::process::Command::new("ipconfig")
-            .arg("/displaydns")
-            .output()
-        {
-            Ok(o) => o,
-            Err(e) => {
-                warn!("Could not run ipconfig /displaydns: {e}");
-                return Vec::new();
+        let output = if cfg!(target_os = "windows") {
+            match std::process::Command::new("ipconfig")
+                .arg("/displaydns")
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!("Could not run ipconfig /displaydns: {e}");
+                    return Vec::new();
+                }
             }
+        } else if cfg!(target_os = "macos") {
+            // On macOS, use dscacheutil to dump DNS cache
+            match std::process::Command::new("dscacheutil")
+                .arg("-cachedump")
+                .arg("-entries")
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!("Could not run dscacheutil (macOS DNS cache): {e}");
+                    return Vec::new();
+                }
+            }
+        } else {
+            // Linux - no standard DNS cache command, skip
+            warn!("DNS cache scanning not supported on this platform");
+            return Vec::new();
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
@@ -121,34 +142,91 @@ impl Monitor {
         violations
     }
 
-    /// Flush the Windows DNS resolver cache.
+    /// Flush the DNS resolver cache (platform-specific).
     fn flush_dns(&self) {
-        match std::process::Command::new("ipconfig")
-            .arg("/flushdns")
-            .output()
-        {
+        let result = if cfg!(target_os = "windows") {
+            std::process::Command::new("ipconfig")
+                .arg("/flushdns")
+                .output()
+        } else if cfg!(target_os = "macos") {
+            // macOS: requires sudo, so we use dscacheutil or killall
+            std::process::Command::new("dscacheutil")
+                .arg("-flushcache")
+                .output()
+                .or_else(|_| {
+                    // Alternative: killall -HUP mDNSResponder
+                    std::process::Command::new("killall")
+                        .arg("-HUP")
+                        .arg("mDNSResponder")
+                        .output()
+                })
+        } else {
+            // Linux - depends on the resolver
+            std::process::Command::new("systemd-resolve")
+                .arg("--flush-caches")
+                .output()
+        };
+
+        match result {
             Ok(_) => info!("DNS cache flushed"),
             Err(e) => warn!("Failed to flush DNS cache: {e}"),
         }
     }
 
-    // ── Browser window title scanning ───────────────────────────
+    // ── Browser window title scanning (Cross-platform) ──────────
 
-    /// On Windows, enumerate top-level window titles to catch banned sites
-    /// even when DNS caching is unreliable. This shells out to a tiny
-    /// PowerShell one-liner for zero extra dependencies.
+    /// Enumerate window titles to catch banned sites.
+    /// Windows: PowerShell Get-Process
+    /// macOS: AppleScript to query browser windows
     pub fn scan_window_titles(&self) -> Vec<Violation> {
-        let ps_script = r#"Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object -ExpandProperty MainWindowTitle"#;
-
-        let output = match std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", ps_script])
-            .output()
-        {
-            Ok(o) => o,
-            Err(e) => {
-                warn!("PowerShell window title scan failed: {e}");
-                return Vec::new();
+        let output = if cfg!(target_os = "windows") {
+            let ps_script = r#"Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object -ExpandProperty MainWindowTitle"#;
+            
+            match std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", ps_script])
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!("PowerShell window title scan failed: {e}");
+                    return Vec::new();
+                }
             }
+        } else if cfg!(target_os = "macos") {
+            // macOS: Use AppleScript to get browser window titles
+            let apple_script = r#"
+                set windowTitles to ""
+                tell application "System Events"
+                    set processList to name of every process whose background only is false
+                end tell
+                repeat with processName in processList
+                    try
+                        tell application processName
+                            if it is running then
+                                repeat with w in windows
+                                    set windowTitles to windowTitles & (name of w) & return
+                                end repeat
+                            end if
+                        end tell
+                    end try
+                end repeat
+                return windowTitles
+            "#;
+            
+            match std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(apple_script)
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!("AppleScript window title scan failed: {e}");
+                    return Vec::new();
+                }
+            }
+        } else {
+            warn!("Window title scanning not supported on this platform");
+            return Vec::new();
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();

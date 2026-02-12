@@ -7,10 +7,11 @@ A lightweight Rust agent that runs on school Windows PCs to enforce usage polici
 | Feature | How it works |
 |---|---|
 | **Process banning** | Scans running processes every N seconds, kills anything on the ban list (Roblox, Steam, Discord, etc.) |
-| **Website detection** | Checks the Windows DNS cache + browser window titles for banned domains |
+| **Website detection** | Checks the DNS cache + browser window titles for banned domains (Windows, macOS, Linux) |
 | **Violation logging** | Every violation is timestamped and pushed to Redis with the hostname + username |
 | **Heartbeat / IP sharing** | Pushes its IP, hostname, and port to Redis so a central dashboard always knows which PCs are online |
 | **HTTP API** | Exposes `/health`, `/info`, `/violations`, `/config` for remote queries |
+| **Cross-platform** | Works on Windows, macOS, and Linux with platform-specific detection methods |
 
 ## Quick start
 
@@ -48,6 +49,25 @@ All keys are prefixed with the `key_prefix` from config (default: `nishack`).
 ## Configuration
 
 Edit `config.toml` next to the executable. See the file for all options.
+
+## Platform-Specific Features
+
+### Windows
+- **DNS Cache**: Uses `ipconfig /displaydns` to detect visited domains
+- **Window Titles**: Uses PowerShell to enumerate all window titles
+- **DNS Flush**: Uses `ipconfig /flushdns`
+
+### macOS
+- **DNS Cache**: Uses `dscacheutil -cachedump` (may be limited on newer macOS versions)
+- **Window Titles**: Uses AppleScript to query browser and application windows
+- **DNS Flush**: Uses `dscacheutil -flushcache` or `killall -HUP mDNSResponder`
+
+### Linux
+- **DNS Cache**: Not supported (no standard DNS cache command)
+- **Window Titles**: Not supported
+- **Process Monitoring**: Fully supported
+
+**Note**: Website detection works best on Windows. On macOS, window title scanning is the primary detection method. On Linux, only process monitoring is available.
 
 ## Building for Windows from macOS/Linux
 
