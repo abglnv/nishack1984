@@ -15,6 +15,16 @@ port = 7770
 # How often (seconds) we scan processes & DNS cache
 scan_interval = 3
 
+[screenshots]
+# Enable or disable screenshot capture
+enabled = true
+# How often (seconds) to capture and send screenshots to Redis
+interval = 60
+# JPEG quality (1-100, higher = better quality but larger size)
+quality = 75
+# Maximum width/height (screenshots will be scaled down if larger)
+max_dimension = 1920
+
 # ── Ban lists ────────────────────────────────────────────────────
 # Process names are matched case-insensitively (without .exe suffix too)
 [monitor.banned_processes]

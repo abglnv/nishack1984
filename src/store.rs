@@ -133,4 +133,53 @@ impl Store {
         let key = self.key(&["agents"]);
         let _: redis::RedisResult<()> = con.sadd(&key, &value).await;
     }
+
+    /// Store a screenshot (base64-encoded) for a host.
+    /// Key: `{prefix}:screenshot:{hostname}` with metadata
+    /// Also pushes to a list for history: `{prefix}:screenshot_history:{hostname}`
+    pub async fn push_screenshot(&self, hostname: &str, screenshot_base64: &str) {
+        let Some(mut con) = self.conn().await else {
+            return;
+        };
+
+        let timestamp = Utc::now();
+        let metadata = serde_json::json!({
+            "hostname": hostname,
+            "timestamp": timestamp,
+            "data": screenshot_base64,
+            "size": screenshot_base64.len(),
+        });
+
+        let payload = match serde_json::to_string(&metadata) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Screenshot serialization error: {e}");
+                return;
+            }
+        };
+
+        // Store latest screenshot with TTL
+        let latest_key = self.key(&["screenshot", hostname]);
+        let result: redis::RedisResult<()> = con.set_ex(&latest_key, &payload, 120).await;
+        if let Err(e) = result {
+            warn!("Failed to push latest screenshot: {e}");
+        } else {
+            info!("Screenshot pushed → {latest_key}");
+        }
+
+        // Also store in history (keep last 10)
+        let history_key = self.key(&["screenshot_history", hostname]);
+        let _: redis::RedisResult<()> = con.lpush(&history_key, &payload).await;
+        let _: redis::RedisResult<()> = con.ltrim(&history_key, 0, 9).await;
+    }
+
+    /// Fetch the latest screenshot for a host.
+    pub async fn latest_screenshot(&self, hostname: &str) -> Option<String> {
+        let Some(mut con) = self.conn().await else {
+            return None;
+        };
+
+        let key = self.key(&["screenshot", hostname]);
+        con.get(&key).await.ok()
+    }
 }

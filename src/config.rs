@@ -7,6 +7,8 @@ pub struct AppConfig {
     pub redis: RedisConfig,
     pub api: ApiConfig,
     pub monitor: MonitorConfig,
+    #[serde(default)]
+    pub screenshots: ScreenshotConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,6 +31,34 @@ pub struct MonitorConfig {
     pub banned_processes: BanList,
     pub banned_domains: BanList,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScreenshotConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_interval")]
+    pub interval: u64,
+    #[serde(default = "default_quality")]
+    pub quality: u8,
+    #[serde(default = "default_max_dimension")]
+    pub max_dimension: u32,
+}
+
+impl Default for ScreenshotConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_enabled(),
+            interval: default_interval(),
+            quality: default_quality(),
+            max_dimension: default_max_dimension(),
+        }
+    }
+}
+
+fn default_enabled() -> bool { true }
+fn default_interval() -> u64 { 60 }
+fn default_quality() -> u8 { 75 }
+fn default_max_dimension() -> u32 { 1920 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BanList {

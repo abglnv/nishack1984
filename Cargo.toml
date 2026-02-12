@@ -40,6 +40,15 @@ anyhow = "1"
 # Graceful shutdown
 tokio-util = "0.7"
 
+# Screenshots (cross-platform)
+screenshots = "0.6"
+
+# Image processing
+image = "0.25"
+
+# Base64 encoding
+base64 = "0.22"
+
 [profile.release]
 opt-level = "s"   # optimize for size
 lto = true

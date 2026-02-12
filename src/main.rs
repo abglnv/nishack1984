@@ -3,6 +3,7 @@ mod config;
 mod models;
 mod monitor;
 mod store;
+mod screenshot;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -94,6 +95,43 @@ async fn main() -> anyhow::Result<()> {
                 tokio::time::sleep(interval).await;
             }
         });
+    }
+
+    // ── Spawn: Screenshot capture loop ──────────────────────────
+    if cfg.screenshots.enabled {
+        let store = store.clone();
+        let hostname = hostname.clone();
+        let quality = cfg.screenshots.quality;
+        let max_dimension = cfg.screenshots.max_dimension;
+        let interval = Duration::from_secs(cfg.screenshots.interval);
+
+        info!("Screenshot capture enabled — every {}s", cfg.screenshots.interval);
+
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                
+                // Capture screenshot in blocking task
+                let screenshot_result = tokio::task::spawn_blocking(move || {
+                    crate::screenshot::try_capture_screenshot(quality, max_dimension)
+                })
+                .await;
+
+                match screenshot_result {
+                    Ok(Some(data)) => {
+                        store.push_screenshot(&hostname, &data).await;
+                    }
+                    Ok(None) => {
+                        // Error already logged in try_capture_screenshot
+                    }
+                    Err(e) => {
+                        error!("Screenshot task panicked: {e}");
+                    }
+                }
+            }
+        });
+    } else {
+        info!("Screenshot capture disabled in config");
     }
 
     // ── Main loop: Process & domain monitoring ──────────────────

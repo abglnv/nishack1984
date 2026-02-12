@@ -33,6 +33,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/info", get(system_info))
         .route("/violations", get(violations))
         .route("/config", get(show_config))
+        .route("/screenshot", get(get_screenshot))
         .layer(CorsLayer::permissive())
         .with_state(Arc::new(state))
 }
@@ -106,6 +107,19 @@ async fn show_config(State(s): State<Arc<AppState>>) -> impl IntoResponse {
         "banned_processes": cfg.banned_processes.names,
         "banned_domains": cfg.banned_domains.names,
     }))
+}
+
+async fn get_screenshot(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    match s.store.latest_screenshot(&s.hostname).await {
+        Some(data) => Json(serde_json::json!({
+            "success": true,
+            "screenshot": data,
+        })),
+        None => Json(serde_json::json!({
+            "success": false,
+            "error": "No screenshot available",
+        })),
+    }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
