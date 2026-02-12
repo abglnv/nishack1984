@@ -1,0 +1,57 @@
+# ── NisHack Agent Configuration ──────────────────────────────────
+
+[redis]
+url = "redis://192.168.8.151:6379"
+# Prefix for all keys this agent writes (allows multi-school setups)
+key_prefix = "nishack"
+# How often (seconds) we push a heartbeat + IP to Redis
+heartbeat_interval = 30
+
+[api]
+# Local HTTP API port (used by the central dashboard to query this PC)
+port = 7770
+
+[monitor]
+# How often (seconds) we scan processes & DNS cache
+scan_interval = 3
+
+# ── Ban lists ────────────────────────────────────────────────────
+# Process names are matched case-insensitively (without .exe suffix too)
+[monitor.banned_processes]
+names = [
+    "RobloxPlayerBeta",
+    "RobloxPlayerLauncher",
+    "RobloxStudioBeta",
+    "RobloxStudio",
+    "RobloxCrashHandler",
+    "FortniteClient-Win64-Shipping",
+    "EpicGamesLauncher",
+    "MinecraftLauncher",
+    "javaw",               # Minecraft Java Edition runtime
+    "GTA5",
+    "FiveM",
+    "steam",
+    "steamwebhelper",
+    "Discord",
+    "DiscordPTB",
+    "DiscordCanary",
+    "Telegram",
+]
+
+# Domains checked against the Windows DNS cache
+[monitor.banned_domains]
+names = [
+    "roblox.com",
+    "www.roblox.com",
+    "web.roblox.com",
+    "auth.roblox.com",
+    "fortnite.com",
+    "epicgames.com",
+    "store.steampowered.com",
+    "discord.com",
+    "web.telegram.org",
+    "tiktok.com",
+    "www.tiktok.com",
+    "instagram.com",
+    "www.instagram.com",
+]

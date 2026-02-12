@@ -1,0 +1,47 @@
+[package]
+name = "nishack"
+version = "0.1.0"
+edition = "2021"
+description = "School PC monitoring agent — process control, violation logging, remote management"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP framework (lightweight axum)
+axum = { version = "0.7", features = ["json"] }
+tower-http = { version = "0.5", features = ["cors"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Redis (async)
+redis = { version = "0.25", features = ["tokio-comp", "aio"] }
+
+# System info (lightweight process enumeration)
+sysinfo = "0.31"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Hostname & networking
+hostname = "0.4"
+local-ip-address = "0.6"
+
+# Error handling
+anyhow = "1"
+
+# Graceful shutdown
+tokio-util = "0.7"
+
+[profile.release]
+opt-level = "s"   # optimize for size
+lto = true
+strip = true
+codegen-units = 1
