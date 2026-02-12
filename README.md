@@ -9,8 +9,9 @@ A lightweight Rust agent that runs on school Windows PCs to enforce usage polici
 | **Process banning** | Scans running processes every N seconds, kills anything on the ban list (Roblox, Steam, Discord, etc.) |
 | **Website detection** | Checks the DNS cache + browser window titles for banned domains (Windows, macOS, Linux) |
 | **Violation logging** | Every violation is timestamped and pushed to Redis with the hostname + username |
+| **Screenshot capture** | Periodically captures and sends screenshots to Redis for teacher's dashboard monitoring |
 | **Heartbeat / IP sharing** | Pushes its IP, hostname, and port to Redis so a central dashboard always knows which PCs are online |
-| **HTTP API** | Exposes `/health`, `/info`, `/violations`, `/config` for remote queries |
+| **HTTP API** | Exposes `/health`, `/info`, `/violations`, `/config`, `/screenshot` for remote queries |
 | **Cross-platform** | Works on Windows, macOS, and Linux with platform-specific detection methods |
 
 ## Quick start
@@ -34,6 +35,7 @@ cargo build --release
 | GET | `/info` | CPU, RAM, OS, username, process count |
 | GET | `/violations?count=50` | Recent violations for this PC |
 | GET | `/config` | Current ban lists and scan interval |
+| GET | `/screenshot` | Latest screenshot from this PC (base64 JPEG) |
 
 ## Redis Keys
 
@@ -45,6 +47,8 @@ All keys are prefixed with the `key_prefix` from config (default: `nishack`).
 | `nishack:agents` | Set | All known `hostname\|ip\|port` entries |
 | `nishack:violations:<hostname>` | List | Violation history (newest first) |
 | `nishack:violation_count:<hostname>` | Integer | Running violation counter |
+| `nishack:screenshot:<hostname>` | String (TTL 120s) | Latest screenshot (base64 JPEG with metadata) |
+| `nishack:screenshot_history:<hostname>` | List | Last 10 screenshots with timestamps |
 
 ## Configuration
 
