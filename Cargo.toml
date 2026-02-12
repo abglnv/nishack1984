@@ -49,6 +49,19 @@ image = "0.25"
 # Base64 encoding
 base64 = "0.22"
 
+# WebSocket client for live screen streaming to teacher server
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+
+# Cross-platform screen capture (primary monitor, returns RgbaImage)
+xcap = "0.0.14"
+
+# SHA-256 hash to skip unchanged frames
+sha2 = "0.10"
+
+# URL parsing
+url = "2"
+
 [profile.release]
 opt-level = "s"   # optimize for size
 lto = true

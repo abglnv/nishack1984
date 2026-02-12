@@ -4,6 +4,7 @@ mod models;
 mod monitor;
 mod store;
 mod screenshot;
+mod ws_stream;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -132,6 +133,23 @@ async fn main() -> anyhow::Result<()> {
         });
     } else {
         info!("Screenshot capture disabled in config");
+    }
+
+    // ── Spawn: Live screen streaming (WebSocket to teacher) ─────
+    if cfg.streaming.enabled {
+        let streaming_cfg = cfg.streaming.clone();
+        let streaming_hostname = hostname.clone();
+
+        info!(
+            "Live streaming enabled — server: {}, interval: {}ms",
+            streaming_cfg.server_url, streaming_cfg.interval_ms
+        );
+
+        tokio::spawn(async move {
+            ws_stream::run_streaming_loop(streaming_cfg, streaming_hostname).await;
+        });
+    } else {
+        info!("Live screen streaming disabled in config");
     }
 
     // ── Main loop: Process & domain monitoring ──────────────────
