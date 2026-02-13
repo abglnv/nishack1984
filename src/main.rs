@@ -52,9 +52,13 @@ async fn main() -> anyhow::Result<()> {
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "127.0.0.1".into());
 
-    let username = std::env::var("USERNAME")
-        .or_else(|_| std::env::var("USER"))
-        .unwrap_or_else(|_| "unknown".into());
+    // Read display name from name.txt next to the executable (or CWD),
+    // fallback to OS username.
+    let username = read_name_file().unwrap_or_else(|| {
+        std::env::var("USERNAME")
+            .or_else(|_| std::env::var("USER"))
+            .unwrap_or_else(|_| "unknown".into())
+    });
 
     info!("Host: {hostname} | IP: {ip} | User: {username}");
 
@@ -161,6 +165,23 @@ async fn main() -> anyhow::Result<()> {
         Monitor::new(&cfg.monitor, hostname.clone(), username),
     ));
 
+    // ── Spawn: Ban config sync from Redis (teacher pushes updates) ─
+    {
+        let sync_store = store.clone();
+        let sync_monitor = Arc::clone(&monitor);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                if let Some((procs, domains)) = sync_store.fetch_ban_config().await {
+                    let mut guard = sync_monitor.lock().expect("Monitor mutex poisoned");
+                    guard.update_bans(procs, domains);
+                    info!("Ban config updated from Redis");
+                }
+            }
+        });
+    }
+
     loop {
         // Run the blocking scan on a dedicated thread so we don't starve
         // the async runtime.
@@ -189,4 +210,35 @@ async fn main() -> anyhow::Result<()> {
 
         tokio::time::sleep(scan_interval).await;
     }
+}
+
+/// Read display name from `name.txt` next to the executable or in CWD.
+/// The file should contain a single line with the student's name (e.g. "Имран Бекмуратов").
+fn read_name_file() -> Option<String> {
+    // Check next to executable first
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+    if let Some(dir) = &exe_dir {
+        let candidate = dir.join("name.txt");
+        if let Ok(content) = std::fs::read_to_string(&candidate) {
+            let name = content.trim().to_string();
+            if !name.is_empty() {
+                info!("Loaded display name from {}: {name}", candidate.display());
+                return Some(name);
+            }
+        }
+    }
+
+    // Fallback: CWD
+    if let Ok(content) = std::fs::read_to_string("name.txt") {
+        let name = content.trim().to_string();
+        if !name.is_empty() {
+            info!("Loaded display name from ./name.txt: {name}");
+            return Some(name);
+        }
+    }
+
+    None
 }

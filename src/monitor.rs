@@ -42,6 +42,14 @@ impl Monitor {
         }
     }
 
+    /// Hot-reload ban lists from centrally-managed config.
+    pub fn update_bans(&mut self, banned_procs: Vec<String>, banned_domains: Vec<String>) {
+        self.banned_procs = banned_procs.iter().map(|n| n.to_lowercase()).collect();
+        self.banned_domains = banned_domains.iter().map(|d| d.to_lowercase()).collect();
+        info!("🔄 Ban lists updated: {} processes, {} domains",
+            self.banned_procs.len(), self.banned_domains.len());
+    }
+
     // ── Process scanning ────────────────────────────────────────
 
     /// Refresh process list, kill banned ones, return violations.

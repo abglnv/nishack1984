@@ -9,7 +9,7 @@
 use std::io::Cursor;
 use std::time::Duration;
 
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
 use sha2::{Digest, Sha256};
@@ -138,7 +138,7 @@ async fn connect_and_stream(cfg: &StreamingConfig, hostname: &str) -> anyhow::Re
         let size_kb = jpeg_bytes.len() as f64 / 1024.0;
         if let Err(e) = write.send(Message::Binary(jpeg_bytes.into())).await {
             error!("Failed to send frame ({size_kb:.1} KB): {e}");
-            return Err(e.into()); // Triggers reconnection
+            return Err(anyhow::anyhow!("{e}")); // Triggers reconnection
         }
 
         info!("📸 Frame sent: {size_kb:.1} KB");

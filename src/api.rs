@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sysinfo::System;
 use tower_http::cors::CorsLayer;
 
@@ -34,7 +34,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/violations", get(violations))
         .route("/config", get(show_config))
         .route("/screenshot", get(get_screenshot))
-        .route("/lock/{mode}", post(lock_handler))
+        .route("/apps", get(list_apps))
+        .route("/lock/:mode", post(lock_handler))
         .route("/open-url", post(open_url_handler))
         .layer(CorsLayer::permissive())
         .with_state(Arc::new(state))
@@ -122,6 +123,84 @@ async fn get_screenshot(State(s): State<Arc<AppState>>) -> impl IntoResponse {
             "error": "No screenshot available",
         })),
     }
+}
+
+// ── Apps handler ────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct ProcessInfo {
+    name: String,
+    pid: u32,
+    cpu_usage: f32,
+    memory_mb: u64,
+}
+
+/// GET /apps — top user-facing processes sorted by memory usage
+async fn list_apps(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    let hostname = s.hostname.clone();
+
+    let apps = tokio::task::spawn_blocking(move || {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        // Second refresh for accurate CPU readings
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        sys.refresh_all();
+
+        // Windows system / background noise to hide
+        const HIDDEN: &[&str] = &[
+            "svchost.exe", "csrss.exe", "smss.exe", "wininit.exe",
+            "services.exe", "lsass.exe", "lsaiso.exe", "fontdrvhost.exe",
+            "dwm.exe", "conhost.exe", "sihost.exe", "taskhostw.exe",
+            "ctfmon.exe", "dllhost.exe", "wuauserv.exe", "spoolsv.exe",
+            "audiodg.exe", "dasHost.exe", "WmiPrvSE.exe", "RuntimeBroker.exe",
+            "SearchHost.exe", "SearchIndexer.exe", "StartMenuExperienceHost.exe",
+            "ShellExperienceHost.exe", "TextInputHost.exe", "ShellHost.exe",
+            "ApplicationFrameHost.exe", "backgroundTaskHost.exe",
+            "SecurityHealthSystray.exe", "SecurityHealthService.exe",
+            "MsMpEng.exe", "NisSrv.exe", "SecHealthUI.exe",
+            "MicrosoftSecurityApp.exe",
+            "OfficeClickToRun.exe", "OneDrive.Sync.Service.exe",
+            "PhoneExperienceHost.exe", "WidgetBoard.exe",
+            "LockApp.exe", "Copilot.exe", "EdgeGameAssist.exe",
+            "System", "Secure System", "Registry", "Memory Compression",
+            "Idle", "explorer.exe", "SystemSettings.exe",
+            "CompPkgSrv.exe", "uhssvc.exe", "SgrmBroker.exe",
+            "SearchProtocolHost.exe", "SearchFilterHost.exe",
+            "OpenWith.exe",
+        ];
+
+        let hidden_lower: Vec<String> = HIDDEN.iter().map(|s| s.to_lowercase()).collect();
+
+        let mut procs: Vec<ProcessInfo> = sys
+            .processes()
+            .values()
+            .filter(|p| {
+                let name = p.name().to_string_lossy().to_string();
+                let mem = p.memory() / 1_048_576;
+                mem > 5 && !hidden_lower.contains(&name.to_lowercase())
+            })
+            .map(|p| ProcessInfo {
+                name: p.name().to_string_lossy().to_string(),
+                pid: p.pid().as_u32(),
+                cpu_usage: p.cpu_usage(),
+                memory_mb: p.memory() / 1_048_576,
+            })
+            .collect();
+
+        // Sort by memory descending, take top 30
+        procs.sort_by(|a, b| b.memory_mb.cmp(&a.memory_mb));
+        procs.truncate(30);
+        procs
+    })
+    .await
+    .unwrap_or_default();
+
+    Json(serde_json::json!({
+        "hostname": hostname,
+        "applications": apps,
+        "browser_tabs": [],
+        "timestamp": chrono::Utc::now(),
+    }))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────

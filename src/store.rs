@@ -211,6 +211,26 @@ impl Store {
         con.get(&key).await.ok()
     }
 
+    /// Fetch the centrally-managed ban config from Redis.
+    /// Returns (banned_processes, banned_domains) or None if unavailable.
+    pub async fn fetch_ban_config(&self) -> Option<(Vec<String>, Vec<String>)> {
+        let mut con = self.conn().await?;
+        let key = self.key(&["ban_config"]);
+        let val: Option<String> = con.get(&key).await.ok()?;
+        let json: serde_json::Value = serde_json::from_str(&val?).ok()?;
+        let procs = json["banned_processes"]
+            .as_array()?
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        let domains = json["banned_domains"]
+            .as_array()?
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        Some((procs, domains))
+    }
+
     /// Discover the teacher server address from Redis.
     /// Returns `Some("IP:PORT")` if the teacher has published its address.
     pub async fn discover_teacher_address(&self) -> Option<String> {
