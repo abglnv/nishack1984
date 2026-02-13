@@ -14,6 +14,20 @@ use crate::config::AppConfig;
 use crate::models::{HealthResponse, SystemSnapshot, ViolationsResponse};
 use crate::store::Store;
 
+/// Create a `Command` that will NOT pop up a console window on Windows.
+#[cfg(target_os = "windows")]
+fn silent_cmd(program: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new(program);
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd
+}
+
+#[cfg(not(target_os = "windows"))]
+fn silent_cmd(program: &str) -> std::process::Command {
+    std::process::Command::new(program)
+}
+
 // ── Shared state ────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -271,7 +285,7 @@ fn soft_lock() -> bool {
     #[cfg(target_os = "windows")]
     {
         // Use the Shell.Application COM object to toggle desktop (minimise all)
-        std::process::Command::new("powershell")
+        silent_cmd("powershell")
             .args(["-WindowStyle", "Hidden", "-Command",
                    "(New-Object -ComObject Shell.Application).MinimizeAll()"])
             .status()
@@ -303,7 +317,7 @@ fn hard_lock() -> bool {
     #[cfg(target_os = "windows")]
     {
         // LockWorkStation via rundll32
-        std::process::Command::new("rundll32.exe")
+        silent_cmd("rundll32.exe")
             .args(["user32.dll,LockWorkStation"])
             .status()
             .map(|s| s.success())
@@ -340,7 +354,7 @@ fn hard_lock() -> bool {
 fn open_url_in_browser(url: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
+        silent_cmd("cmd")
             .args(["/C", "start", "", url])
             .status()
             .map(|s| s.success())

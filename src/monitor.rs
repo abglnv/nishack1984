@@ -7,6 +7,20 @@ use tracing::{info, warn};
 use crate::config::MonitorConfig;
 use crate::models::{Violation, ViolationKind};
 
+/// Create a `Command` that will NOT pop up a console window on Windows.
+#[cfg(target_os = "windows")]
+fn silent_cmd(program: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new(program);
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd
+}
+
+#[cfg(not(target_os = "windows"))]
+fn silent_cmd(program: &str) -> std::process::Command {
+    std::process::Command::new(program)
+}
+
 /// Holds a system handle and the ban configuration.
 pub struct Monitor {
     sys: System,
@@ -94,7 +108,7 @@ impl Monitor {
     /// macOS/Linux: dscacheutil -cachedump or parse browser history/network logs
     pub fn scan_dns_cache(&self) -> Vec<Violation> {
         let output = if cfg!(target_os = "windows") {
-            match std::process::Command::new("ipconfig")
+            match silent_cmd("ipconfig")
                 .arg("/displaydns")
                 .output()
             {
@@ -153,7 +167,7 @@ impl Monitor {
     /// Flush the DNS resolver cache (platform-specific).
     fn flush_dns(&self) {
         let result = if cfg!(target_os = "windows") {
-            std::process::Command::new("ipconfig")
+            silent_cmd("ipconfig")
                 .arg("/flushdns")
                 .output()
         } else if cfg!(target_os = "macos") {
@@ -190,7 +204,7 @@ impl Monitor {
         let output = if cfg!(target_os = "windows") {
             let ps_script = r#"Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object -ExpandProperty MainWindowTitle"#;
             
-            match std::process::Command::new("powershell")
+            match silent_cmd("powershell")
                 .args(["-NoProfile", "-Command", ps_script])
                 .output()
             {

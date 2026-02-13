@@ -1,3 +1,6 @@
+// Hide the console window on Windows so the agent runs silently in the background.
+#![windows_subsystem = "windows"]
+
 mod api;
 mod config;
 mod models;

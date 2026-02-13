@@ -108,21 +108,43 @@ impl Store {
 
     /// Record a violation. Stored in a Redis list so we keep history.
     /// Key: `{prefix}:violations:{hostname}`
+    ///
+    /// We serialise into the **teacher-backend** schema so the dashboard can
+    /// deserialise it directly:  { hostname, rule, detail, severity, timestamp }
     pub async fn record_violation(&self, v: &Violation) {
         let Some(mut con) = self.conn().await else {
             return;
         };
 
-        let key = self.key(&["violations", &v.hostname]);
-        let payload = match serde_json::to_string(v) {
-            Ok(p) => p,
-            Err(e) => {
-                error!("Violation serialization error: {e}");
-                return;
-            }
+        // Map student model → teacher-compatible JSON
+        let rule = match v.kind {
+            ViolationKind::Process => "banned_process",
+            ViolationKind::Domain  => "banned_domain",
         };
+        let severity = match v.kind {
+            ViolationKind::Process => "high",
+            ViolationKind::Domain  => "medium",
+        };
+        let detail = format!(
+            "{}: {} ({})",
+            match v.kind {
+                ViolationKind::Process => "Запрещённый процесс",
+                ViolationKind::Domain  => "Запрещённый домен",
+            },
+            v.target,
+            if v.action_taken { "заблокировано" } else { "не удалось заблокировать" }
+        );
 
-        let result: redis::RedisResult<()> = con.lpush(&key, &payload).await;
+        let payload = serde_json::json!({
+            "hostname": v.hostname,
+            "rule": rule,
+            "detail": detail,
+            "severity": severity,
+            "timestamp": v.timestamp.to_rfc3339(),
+        });
+
+        let key = self.key(&["violations", &v.hostname]);
+        let result: redis::RedisResult<()> = con.lpush(&key, payload.to_string()).await;
         if let Err(e) = result {
             warn!("Failed to record violation: {e}");
         }
@@ -235,9 +257,11 @@ impl Store {
     /// Returns `Some("IP:PORT")` if the teacher has published its address.
     pub async fn discover_teacher_address(&self) -> Option<String> {
         let mut con = self.conn().await?;
-        let key = self.key(&["teacher", "address"]);
-        let val: Option<String> = con.get(&key).await.ok()?;
-        val
+        // Teacher publishes its IP to {prefix}:server:ip (no port).
+        // Default teacher port is 8080.
+        let key = self.key(&["server", "ip"]);
+        let ip: Option<String> = con.get(&key).await.ok()?;
+        ip.map(|addr| format!("{addr}:8080"))
     }
 
     /// Forward a violation to the teacher backend via REST API.
