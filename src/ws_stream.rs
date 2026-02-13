@@ -20,16 +20,36 @@ use tracing::{error, info, warn};
 use crate::config::StreamingConfig;
 
 /// Capture the primary screen using xcap and return a DynamicImage.
+/// Re-enumerates monitors every call so we recover after sleep/wake.
 fn capture_screen() -> anyhow::Result<DynamicImage> {
-    let monitors = xcap::Monitor::all()?;
-    let monitor = monitors
-        .into_iter()
-        .find(|m| m.is_primary())
-        .or_else(|| xcap::Monitor::all().ok().and_then(|m| m.into_iter().next()))
-        .ok_or_else(|| anyhow::anyhow!("No monitors found"))?;
-
-    let raw = monitor.capture_image()?;
-    Ok(DynamicImage::ImageRgba8(raw))
+    // Retry up to 3 times with a short pause — the GPU driver may not be
+    // ready immediately after waking from sleep.
+    let mut last_err = anyhow::anyhow!("No monitors found");
+    for attempt in 0..3 {
+        match xcap::Monitor::all() {
+            Ok(monitors) => {
+                if let Some(monitor) = monitors
+                    .into_iter()
+                    .find(|m| m.is_primary())
+                    .or_else(|| xcap::Monitor::all().ok().and_then(|m| m.into_iter().next()))
+                {
+                    match monitor.capture_image() {
+                        Ok(raw) => return Ok(DynamicImage::ImageRgba8(raw)),
+                        Err(e) => {
+                            last_err = e.into();
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                last_err = e.into();
+            }
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+    Err(last_err)
 }
 
 /// Compress a DynamicImage to JPEG bytes in memory, optionally resizing.
@@ -103,17 +123,39 @@ async fn connect_and_stream(cfg: &StreamingConfig, hostname: &str) -> anyhow::Re
     let frame_interval = Duration::from_millis(cfg.interval_ms);
     let quality = cfg.quality;
     let max_dim = cfg.max_dimension;
+    let mut consecutive_capture_fails: u32 = 0;
 
     loop {
         sleep(frame_interval).await;
 
-        // Capture screen on a blocking thread
-        let screenshot = tokio::task::spawn_blocking(move || capture_screen()).await?;
+        // Capture screen on a blocking thread (with timeout for sleep/wake)
+        let capture_result = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || capture_screen()),
+        )
+        .await;
 
-        let img = match screenshot {
-            Ok(img) => img,
-            Err(e) => {
-                warn!("Screen capture failed: {e}");
+        let img = match capture_result {
+            Ok(Ok(Ok(img))) => {
+                consecutive_capture_fails = 0;
+                img
+            }
+            Ok(Ok(Err(e))) => {
+                consecutive_capture_fails += 1;
+                warn!("Screen capture failed ({consecutive_capture_fails}x): {e}");
+                if consecutive_capture_fails > 5 {
+                    sleep(Duration::from_secs(5)).await;
+                }
+                continue;
+            }
+            Ok(Err(e)) => {
+                warn!("Screen capture task panicked: {e}");
+                continue;
+            }
+            Err(_) => {
+                consecutive_capture_fails += 1;
+                warn!("Screen capture timed out (display waking up?)");
+                sleep(Duration::from_secs(3)).await;
                 continue;
             }
         };
@@ -134,13 +176,26 @@ async fn connect_and_stream(cfg: &StreamingConfig, hostname: &str) -> anyhow::Re
         }
         last_hash = hash;
 
-        // Send binary frame
+        // Send binary frame (timeout so we don't hang on a dead socket)
         let size_kb = jpeg_bytes.len() as f64 / 1024.0;
-        if let Err(e) = write.send(Message::Binary(jpeg_bytes.into())).await {
-            error!("Failed to send frame ({size_kb:.1} KB): {e}");
-            return Err(anyhow::anyhow!("{e}")); // Triggers reconnection
-        }
+        let send_result = tokio::time::timeout(
+            Duration::from_secs(10),
+            write.send(Message::Binary(jpeg_bytes.into())),
+        )
+        .await;
 
-        info!("📸 Frame sent: {size_kb:.1} KB");
+        match send_result {
+            Ok(Ok(())) => {
+                info!("📸 Frame sent: {size_kb:.1} KB");
+            }
+            Ok(Err(e)) => {
+                error!("Failed to send frame ({size_kb:.1} KB): {e}");
+                return Err(anyhow::anyhow!("{e}")); // Triggers reconnection
+            }
+            Err(_) => {
+                error!("Frame send timed out — connection likely dead");
+                return Err(anyhow::anyhow!("send timeout")); // Triggers reconnection
+            }
+        }
     }
 }

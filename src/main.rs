@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::api::{build_router, AppState};
 use crate::config::AppConfig;
@@ -117,25 +117,46 @@ async fn main() -> anyhow::Result<()> {
         info!("Screenshot capture enabled — every {}s", cfg.screenshots.interval);
 
         tokio::spawn(async move {
+            let mut consecutive_failures: u32 = 0;
             loop {
                 tokio::time::sleep(interval).await;
-                
-                // Capture screenshot in blocking task
-                let screenshot_result = tokio::task::spawn_blocking(move || {
+
+                // Capture with a timeout — after sleep/wake the display
+                // driver may not be ready yet, so we don't want to hang.
+                let capture_fut = tokio::task::spawn_blocking(move || {
                     crate::screenshot::try_capture_screenshot(quality, max_dimension)
-                })
-                .await;
+                });
+                let screenshot_result =
+                    tokio::time::timeout(Duration::from_secs(15), capture_fut).await;
 
                 match screenshot_result {
-                    Ok(Some(data)) => {
+                    Ok(Ok(Some(data))) => {
+                        consecutive_failures = 0;
                         store.push_screenshot(&hostname, &data).await;
                     }
-                    Ok(None) => {
-                        // Error already logged in try_capture_screenshot
+                    Ok(Ok(None)) => {
+                        // Capture failed (logged inside try_capture_screenshot)
+                        consecutive_failures += 1;
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         error!("Screenshot task panicked: {e}");
+                        consecutive_failures += 1;
                     }
+                    Err(_) => {
+                        warn!("Screenshot capture timed-out (display may be waking up)");
+                        consecutive_failures += 1;
+                    }
+                }
+
+                // After repeated failures (e.g. sleep mode), wait longer
+                // before retrying to avoid busy-looping.
+                if consecutive_failures > 3 {
+                    let backoff = Duration::from_secs(
+                        (consecutive_failures as u64).min(30)
+                    );
+                    warn!("Screenshot: {} consecutive failures, backing off {}s",
+                          consecutive_failures, backoff.as_secs());
+                    tokio::time::sleep(backoff).await;
                 }
             }
         });

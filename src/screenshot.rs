@@ -6,17 +6,35 @@ use tracing::{info, warn};
 
 /// Captures a screenshot of the primary display and returns it as a base64-encoded JPEG.
 pub fn capture_screenshot(quality: u8, max_dimension: u32) -> Result<String> {
-    // Get all screens
-    let screens = Screen::all()?;
-    
-    // Use the first screen (primary display)
-    let screen = screens.first()
-        .ok_or_else(|| anyhow::anyhow!("No screens found"))?;
+    // Retry screen enumeration — after sleep/wake the GPU driver may need
+    // a moment before displays are available again.
+    let mut last_err = anyhow::anyhow!("No screens found");
+    let mut screen_capture = None;
 
-    info!("Capturing screenshot from display: {:?}", screen.display_info);
+    for attempt in 0..3 {
+        match Screen::all() {
+            Ok(screens) => {
+                if let Some(s) = screens.first() {
+                    match s.capture() {
+                        Ok(img) => {
+                            screen_capture = Some((img, s.display_info));
+                            break;
+                        }
+                        Err(e) => last_err = e.into(),
+                    }
+                }
+            }
+            Err(e) => last_err = e.into(),
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
 
-    // Capture the screenshot
-    let image = screen.capture()?;
+    let (image, display_info) = screen_capture
+        .ok_or(last_err)?;
+
+    info!("Capturing screenshot from display: {:?}", display_info);
 
     // Convert to image crate format
     let width = image.width();
