@@ -1,7 +1,7 @@
 # ── NisHack Agent Configuration ──────────────────────────────────
 
 [redis]
-url = "redis://192.168.8.151:6379"
+url = ""
 # Prefix for all keys this agent writes (allows multi-school setups)
 key_prefix = "nishack"
 # How often (seconds) we push a heartbeat + IP to Redis
@@ -30,7 +30,7 @@ max_dimension = 1920
 # Enable real-time screen streaming over WebSocket
 enabled = true
 # Teacher backend WebSocket URL for screen relay
-server_url = "ws://192.168.8.151:8080/ws/screen"
+server_url = "ws://localhost:8080/ws/screen"
 # JPEG quality for stream (lower = less bandwidth, 40-70 recommended)
 quality = 60
 # Max dimension for streamed frames (scales down if larger)

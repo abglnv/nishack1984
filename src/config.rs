@@ -100,7 +100,7 @@ impl Default for StreamingConfig {
 }
 
 fn streaming_default_enabled() -> bool { true }
-fn streaming_default_url() -> String { "ws://192.168.8.151:8080/ws/screen".into() }
+fn streaming_default_url() -> String { "ws://localhost:8080/ws/screen".into() }
 fn streaming_default_quality() -> u8 { 60 }
 fn streaming_default_max_dim() -> u32 { 1280 }
 fn streaming_default_interval_ms() -> u64 { 700 }

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::net::TcpListener;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::{error, info, warn};
 
 use crate::api::{build_router, AppState};
@@ -166,15 +167,26 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Spawn: Live screen streaming (WebSocket to teacher) ─────
     if cfg.streaming.enabled {
-        let streaming_cfg = cfg.streaming.clone();
+        let mut streaming_cfg = cfg.streaming.clone();
         let streaming_hostname = hostname.clone();
-
-        info!(
-            "Live streaming enabled — server: {}, interval: {}ms",
-            streaming_cfg.server_url, streaming_cfg.interval_ms
-        );
+        let streaming_store = store.clone();
 
         tokio::spawn(async move {
+            info!("Waiting for teacher server address from Redis...");
+            let address = loop {
+                if let Some(addr) = streaming_store.discover_teacher_address().await {
+                    break addr;
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            };
+
+            streaming_cfg.server_url = format!("ws://{}/ws/screen", address);
+
+            info!(
+                "Live streaming enabled — server: {}, interval: {}ms",
+                streaming_cfg.server_url, streaming_cfg.interval_ms
+            );
+
             ws_stream::run_streaming_loop(streaming_cfg, streaming_hostname).await;
         });
     } else {
@@ -201,6 +213,75 @@ async fn main() -> anyhow::Result<()> {
                     let mut guard = sync_monitor.lock().expect("Monitor mutex poisoned");
                     guard.update_bans(procs, domains);
                     info!("Ban config updated from Redis");
+                }
+            }
+        });
+    }
+
+    // ── Spawn: SAU mode manager (anticheat.py) ──────────────────
+    {
+        let sau_store = store.clone();
+        let sau_child: Arc<TokioMutex<Option<std::process::Child>>> =
+            Arc::new(TokioMutex::new(None));
+        let sau_child_clone = Arc::clone(&sau_child);
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            let anticheat_dir = r"C:\Users\jafar\Documents\GitHub\anticheat";
+            let venv_python = format!(r"{anticheat_dir}\venv\Scripts\python.exe");
+            let script = format!(r"{anticheat_dir}\anticheat.py");
+
+            loop {
+                interval.tick().await;
+
+                let enabled = sau_store.fetch_sau_mode().await.unwrap_or(false);
+                let mut guard = sau_child_clone.lock().await;
+
+                if enabled {
+                    // Check if process is already running
+                    let running = match guard.as_mut() {
+                        Some(child) => match child.try_wait() {
+                            Ok(None) => true,   // still running
+                            _ => false,          // exited or error
+                        },
+                        None => false,
+                    };
+
+                    if !running {
+                        info!("🛡️ SAU mode ON — starting anticheat.py");
+                        #[cfg(target_os = "windows")]
+                        let result = {
+                            use std::os::windows::process::CommandExt;
+                            std::process::Command::new(&venv_python)
+                                .arg(&script)
+                                .current_dir(anticheat_dir)
+                                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                                .spawn()
+                        };
+                        #[cfg(not(target_os = "windows"))]
+                        let result = {
+                            std::process::Command::new(&venv_python)
+                                .arg(&script)
+                                .current_dir(anticheat_dir)
+                                .spawn()
+                        };
+                        match result {
+                            Ok(child) => {
+                                info!("✅ anticheat.py started (PID {})", child.id());
+                                *guard = Some(child);
+                            }
+                            Err(e) => {
+                                warn!("Failed to start anticheat.py: {e}");
+                            }
+                        }
+                    }
+                } else {
+                    // SAU mode OFF — kill process if running
+                    if let Some(mut child) = guard.take() {
+                        info!("🛑 SAU mode OFF — stopping anticheat.py (PID {})", child.id());
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
                 }
             }
         });

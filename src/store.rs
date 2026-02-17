@@ -253,6 +253,14 @@ impl Store {
         Some((procs, domains))
     }
 
+    /// Check whether SAU mode is enabled by the teacher.
+    pub async fn fetch_sau_mode(&self) -> Option<bool> {
+        let mut con = self.conn().await?;
+        let key = self.key(&["sau_mode"]);
+        let val: Option<String> = con.get(&key).await.ok()?;
+        val.map(|v| v == "1")
+    }
+
     /// Discover the teacher server address from Redis.
     /// Returns `Some("IP:PORT")` if the teacher has published its address.
     pub async fn discover_teacher_address(&self) -> Option<String> {
